@@ -1,4 +1,3 @@
-
 import numpy as np
 
 from skimage.color import rgb2gray
@@ -6,7 +5,7 @@ from skimage import data, io, filters
 import os
 from skimage import morphology as morph
 
-from skimage.morphology import convex_hull_image
+from skimage import img_as_float
 from skimage.filters import gaussian
 from sklearn.utils import shuffle
 from skimage.transform import resize
@@ -14,98 +13,54 @@ from skimage import img_as_float
 from glob import glob
 import argparse, sys
 import pylab as plt
-parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, parent)
-from mlkit import bc_utils as bc 
-from mlkit.pytorch_kit import models as tm
-from mlkit import image_utils as iu
+from skimage.io import imread
+from model import BoatDetector
+import torch
+import pylab as plt
 
-data_home = "../../Datasets/" 
+def last2first(X):
+    # CHANNELS LAST
+    if X.ndim == 3:
+        return np.transpose(X, (2,0,1))
+    if X.ndim == 4:
+        return np.transpose(X, (0,3,1,2))
 
-def show(m, i, xx=None, image=False):
-    if xx is None:
-        xh = m.get_heatmap(X[i:i+1])
-        print "Max activation: %f" % xh.max()
-        if image:
-            iu.show(xh, X[i], y[i])
-    else:
-        xh = m.get_heatmap(xx[i:i+1])
-        print "Max activation: %f" % xh.max()
-        if image:
-            iu.show(xh, xx[i], y[i])
-
+def first2last(X):
+    # CHANNELS FIRST
+    if X.ndim == 3:
+        return np.transpose(X, (1,2,0))
+    if X.ndim == 4:
+        return np.transpose(X, (0,2,3,1))
 
 if __name__ == "__main__":
-    argv = sys.argv[1:]
+    # 1. LOAD IMAGES
+    X = []
+    for img_id in range(4):
+        X += [img_as_float(imread("images/%d.png" % img_id))]
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-l','--lake_name', default="Yellow_docks_1",
-                        choices=["Yellow_docks_1", "Como_Lake_2"])  
-    parser.add_argument('-w','--weakly_labeled', type=int, default=1)
-    parser.add_argument('-r','--reset', type=int, default=0)  
-    io_args = parser.parse_args()
-    reset = io_args.reset
+    X = last2first(np.array(X))
+    n_rows, n_cols = X.shape[2:]
 
-    # GET DATA
-    lake = io_args.lake_name
-    laked = bc.load_config(lake, data_home)
-    weakly_labeled = io_args.weakly_labeled
+    # 2. LOAD MODEL
+    model = BoatDetector(n_channels=3, n_outputs=1)
+    model.load_state_dict(torch.load("model_weights.pth", map_location=lambda storage, loc: storage))
 
-    #------- 1. TRAIN SET
-    train_set = np.arange(laked["n_train"])
-    fname = "_train_%s_%d.npy" % (lake, weakly_labeled)
-    if os.path.exists("X" + fname) and not reset:
-        X = np.load("X" + fname)
-        y = np.load("y" + fname)
-        print "%s: X, y exists..." % fname 
-    else:
-        X, y = bc.get_imgList(train_set, bg=True, laked=laked, 
-                                weakly_labeled=weakly_labeled)
-        np.save("X" + fname, X)
-        np.save("y" + fname, y)
+    # 3. PREDICT
+    y_pred = model.predict(X)
+    y_pred = np.squeeze(y_pred)
 
-        print "%s: X, y saved..." % fname
+    # 4. SAVE PREDICTIONS
+    for i in range(len(y_pred)):
+        plt.subplot(1, 2, 1)
+        plt.imshow(first2last(X[i]))
 
-    train_fi = np.reshape(y, (y.shape[0],-1)).sum(axis=1) > 1
-    train_nf = np.logical_not(train_fi)
+        plt.subplot(1, 2, 2)
+        plt.imshow(first2last(X[i]))
+        plt.imshow(resize(y_pred[i], (n_rows, n_cols)), alpha=0.5)
 
-    Xfi, yfi = X[train_fi], y[train_fi]
-    Xnf, ynf = X[train_nf], y[train_nf]
+        plt.tight_layout()
+        plt.savefig("results/%d.png" % i)
 
-    #------- 2. VALID SET
-    fname = "_valid_%s_%d.npy" % (lake, weakly_labeled)
-    valid_set = np.arange(laked["n_train"], laked["n_train"]+laked["n_valid"])
-    if os.path.exists("X" + fname) and not reset:
-        Xv = np.load("X" + fname)
-        yv = np.load("y" + fname)
-        print "%s: Xv, yv exists..." % fname
-    else:
-
-        Xv, yv = bc.get_imgList(valid_set, bg=True, laked=laked, 
-                                weakly_labeled=weakly_labeled)
-        np.save("X" + fname, Xv)
-        np.save("y" + fname, yv)
-        print "%s: Xv, yv saved saved..." % fname
-
-    n_rows, n_cols = X.shape[2], X.shape[3]
-
-    # ---------- 4. TRAIN MODEL
-    #model = mt.SmallUNet(n_channels=3, n_classes=1, loss_name="binary_crossentropy")
-    model = tm.LocalizePoint(n_channels=3, n_outputs=1, loss_name="bce_localize")
-    # xx = X[:50,:, 130:210, 400:480]
-    # yy = y[:50,:, 130:210, 400:480]
-    # x = xx[20:40]
-    # y = np.zeros(20); y[0] = 1; y[13] = 1; y[8]=1
-    # #model = mt.Localize(n_channels=3, n_outputs=2)
-    # # model = mt.Localize_2(n_channels=3, n_outputs=1)
-    # # model.forward_pass(x)
-    # # model.get_heatmap(x)
-
-    
-    y[y==-1] = 0
-    X = X[:,:,:300,:330]
-    y = y[:,:,:300,:330]
-    Xv = Xv[:,:,:300,:330]
-    import pdb; pdb.set_trace()  # breakpoint bac9388b //
-
-    model.fit(X[:50], y[:50], epochs=100, batch_size=50)
+        plt.show()
+        plt.close()
+    import pdb; pdb.set_trace()  # breakpoint bd2e165c //
