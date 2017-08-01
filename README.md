@@ -2,4 +2,4 @@ Run the main.py file to load the model and get the boat location predictions of 
 
 The results should look like this:
 
-![](results/1.png)
+![Heatmap for the first lake image](results/1.png)
